@@ -394,7 +394,7 @@ fn test_string_conversions() -> None:
 # CHECK-LABEL: test_len
 def test_len():
     print("=== test_len ===")
-    var empty_list = Python.evaluate("[]")
+    var empty_list = Python.list()
     # CHECK: 0
     print(len(empty_list))
 
@@ -430,14 +430,14 @@ def test_is():
 
 
 # CHECK-LABEL: test_iter
-fn test_iter() raises -> None:
+fn test_iter() raises:
     print("=== test_iter ===")
 
-    var list: PythonObject = ["apple", "orange", "banana"]
+    var list_obj: PythonObject = ["apple", "orange", "banana"]
     # CHECK: I like to eat apple
     # CHECK: I like to eat orange
     # CHECK: I like to eat banana
-    for fruit in list:
+    for fruit in list_obj:
         print("I like to eat", fruit)
 
     var list2: PythonObject = []
@@ -453,6 +453,43 @@ fn test_iter() raises -> None:
             assert_false(True)
 
 
+fn test_setitem() raises:
+    var ll = PythonObject([1, 2, 3, "food"])
+    # CHECK: [1, 2, 3, 'food']
+    print(ll)
+    ll[1] = "nomnomnom"
+    # CHECK: [1, 'nomnomnom', 3, 'food']
+    print(ll)
+
+
+fn test_dict() raises:
+    var d = Dict[PythonObject, PythonObject]()
+    d["food"] = "remove this"
+    d["fries"] = "yes"
+    d["food"] = 123  # intentionally replace to ensure keys stay in order
+
+    var dd = PythonObject(d)
+    # CHECK: {'food': 123, 'fries': 'yes'}
+    print(dd)
+
+    dd["food"] = "salad"
+    dd[42] = Python.evaluate("[4, 2]")
+    # CHECK: {'food': 'salad', 'fries': 'yes', 42: [4, 2]}
+    print(dd)
+
+    # Also test that Python.dict() creates the right object.
+    var empty = Python.dict()
+    # CHECK: empty: {}
+    print("empty:", empty)
+
+
+fn test_none() raises:
+    var n = Python.none()
+    # CHECK: None from Python: None
+    print("None from Python: ", n)
+    assert_true(n is None)
+
+
 def main():
     # initializing Python instance calls init_python
     var python = Python()
@@ -463,3 +500,6 @@ def main():
     test_len()
     test_is()
     test_iter()
+    test_setitem()
+    test_dict()
+    test_none()

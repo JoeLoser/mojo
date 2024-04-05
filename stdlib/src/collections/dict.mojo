@@ -51,6 +51,7 @@ struct _DictEntryIter[
     V: CollectionElement,
     dict_mutability: __mlir_type.`i1`,
     dict_lifetime: AnyLifetime[dict_mutability].type,
+    address_space: AddressSpace = AddressSpace.GENERIC,
 ]:
     """Iterator over immutable DictEntry references.
 
@@ -59,6 +60,7 @@ struct _DictEntryIter[
         V: The value type of the elements in the dictionary.
         dict_mutability: Whether the reference to the dictionary is mutable.
         dict_lifetime: The lifetime of the List
+        address_space: the address_space of the list
     """
 
     alias imm_dict_lifetime = __mlir_attr[
@@ -101,6 +103,7 @@ struct _DictKeyIter[
     V: CollectionElement,
     dict_mutability: __mlir_type.`i1`,
     dict_lifetime: AnyLifetime[dict_mutability].type,
+    address_space: AddressSpace = AddressSpace.GENERIC,
 ]:
     """Iterator over immutable Dict key references.
 
@@ -109,14 +112,21 @@ struct _DictKeyIter[
         V: The value type of the elements in the dictionary.
         dict_mutability: Whether the reference to the vector is mutable.
         dict_lifetime: The lifetime of the List
+        address_space: The address space of the List
     """
 
     alias imm_dict_lifetime = __mlir_attr[
         `#lit.lifetime.mutcast<`, dict_lifetime, `> : !lit.lifetime<1>`
     ]
-    alias ref_type = Reference[K, __mlir_attr.`0: i1`, Self.imm_dict_lifetime]
+    alias ref_type = Reference[
+        K, __mlir_attr.`0: i1`, Self.imm_dict_lifetime, address_space
+    ]
 
-    var iter: _DictEntryIter[K, V, dict_mutability, dict_lifetime]
+    alias dict_entry_iter = _DictEntryIter[
+        K, V, dict_mutability, dict_lifetime, address_space
+    ]
+
+    var iter: Self.dict_entry_iter
 
     fn __iter__(self) -> Self:
         return self
@@ -126,9 +136,13 @@ struct _DictKeyIter[
         var mlir_ptr = __mlir_op.`lit.ref.to_pointer`(
             Reference(entry_ref[].key).value
         )
-        var key_ptr = AnyPointer[K] {
+        var key_ptr = AnyPointer[
+            K, address_space = Self.dict_entry_iter.address_space
+        ] {
             value: __mlir_op.`pop.pointer.bitcast`[
-                _type = AnyPointer[K].pointer_type
+                _type = AnyPointer[
+                    K, address_space = Self.dict_entry_iter.address_space
+                ].pointer_type
             ](mlir_ptr)
         }
         return __mlir_op.`lit.ref.from_pointer`[
@@ -145,6 +159,7 @@ struct _DictValueIter[
     V: CollectionElement,
     dict_mutability: __mlir_type.`i1`,
     dict_lifetime: AnyLifetime[dict_mutability].type,
+    address_space: AddressSpace = AddressSpace.GENERIC,
 ]:
     """Iterator over Dict value references. These are mutable if the dict
     is mutable.
@@ -154,11 +169,14 @@ struct _DictValueIter[
         V: The value type of the elements in the dictionary.
         dict_mutability: Whether the reference to the vector is mutable.
         dict_lifetime: The lifetime of the List
+        address_space: The address space of the List
     """
 
-    alias ref_type = Reference[V, dict_mutability, dict_lifetime]
+    alias ref_type = Reference[V, dict_mutability, dict_lifetime, address_space]
 
-    var iter: _DictEntryIter[K, V, dict_mutability, dict_lifetime]
+    var iter: _DictEntryIter[
+        K, V, dict_mutability, dict_lifetime, address_space
+    ]
 
     fn __iter__(self) -> Self:
         return self
@@ -168,9 +186,9 @@ struct _DictValueIter[
         var mlir_ptr = __mlir_op.`lit.ref.to_pointer`(
             Reference(entry_ref[].value).value
         )
-        var value_ptr = AnyPointer[V] {
+        var value_ptr = AnyPointer[V, address_space] {
             value: __mlir_op.`pop.pointer.bitcast`[
-                _type = AnyPointer[V].pointer_type
+                _type = AnyPointer[V, address_space].pointer_type
             ](mlir_ptr)
         }
         return __mlir_op.`lit.ref.from_pointer`[
@@ -493,7 +511,7 @@ struct Dict[K: KeyElement, V: CollectionElement](Sized, CollectionElement):
         self._insert(key, value)
 
     fn __contains__(self, key: K) -> Bool:
-        """Check if a given value is in the dictionary or not.
+        """Check if a given key is in the dictionary or not.
 
         Args:
             key: The key to check.
@@ -640,7 +658,6 @@ struct Dict[K: KeyElement, V: CollectionElement](Sized, CollectionElement):
 
     fn update(inout self, other: Self, /):
         """Update the dictionary with the key/value pairs from other, overwriting existing keys.
-
         The argument must be positional only.
 
         Args:
@@ -760,3 +777,215 @@ struct Dict[K: KeyElement, V: CollectionElement](Sized, CollectionElement):
                 self._entries[right] = None
 
         self._n_entries = self.size
+
+
+struct OwnedKwargsDict[V: CollectionElement](Sized, CollectionElement):
+    """Container used to pass owned variadic keyword arguments to functions.
+
+    This type mimics the interface of a dictionary with `String` keys, and
+    should be usable more-or-less like a dictionary. Notably, however, this type
+    should not be instantiated directly by users.
+
+    Parameters:
+        V: The value type of the dictionary. Currently must be CollectionElement.
+    """
+
+    alias key_type = String
+
+    var _dict: Dict[Self.key_type, V]
+
+    fn __init__(inout self):
+        """Initialize an empty keyword dictionary."""
+        self._dict = Dict[Self.key_type, V]()
+
+    fn __copyinit__(inout self, existing: Self):
+        """Copy an existing keyword dictionary.
+
+        Args:
+            existing: The existing keyword dictionary.
+        """
+        self._dict = existing._dict
+
+    fn __moveinit__(inout self, owned existing: Self):
+        """Move data of an existing keyword dictionary into a new one.
+
+        Args:
+            existing: The existing keyword dictionary.
+        """
+        self._dict = existing._dict^
+
+    @always_inline("nodebug")
+    fn __getitem__(self, key: Self.key_type) raises -> V:
+        """Retrieve a value out of the keyword dictionary.
+
+        Args:
+            key: The key to retrieve.
+
+        Returns:
+            The value associated with the key, if it's present.
+
+        Raises:
+            "KeyError" if the key isn't present.
+        """
+        return self._dict[key]
+
+    @always_inline("nodebug")
+    fn __setitem__(inout self, key: Self.key_type, value: V):
+        """Set a value in the keyword dictionary by key.
+
+        Args:
+            key: The key to associate with the specified value.
+            value: The data to store in the dictionary.
+        """
+        self._dict[key] = value
+
+    @always_inline("nodebug")
+    fn __contains__(self, key: Self.key_type) -> Bool:
+        """Check if a given key is in the keyword dictionary or not.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if there key exists in the keyword dictionary, False
+            otherwise.
+        """
+        return key in self._dict
+
+    @always_inline("nodebug")
+    fn __len__(self) -> Int:
+        """The number of elements currenly stored in the keyword dictionary."""
+        return len(self._dict)
+
+    @always_inline("nodebug")
+    fn find(self, key: Self.key_type) -> Optional[V]:
+        """Find a value in the keyword dictionary by key.
+
+        Args:
+            key: The key to search for in the dictionary.
+
+        Returns:
+            An optional value containing a copy of the value if it was present,
+            otherwise an empty Optional.
+        """
+        return self._dict.find(key)
+
+    @always_inline("nodebug")
+    fn pop(
+        inout self, key: self.key_type, owned default: Optional[V] = None
+    ) raises -> V:
+        """Remove a value from the keyword dictionary by key.
+
+        Args:
+            key: The key to remove from the dictionary.
+            default: Optionally provide a default value to return if the key
+                was not found instead of raising.
+
+        Returns:
+            The value associated with the key, if it was in the dictionary.
+            If it wasn't, return the provided default value instead.
+
+        Raises:
+            "KeyError" if the key was not present in the dictionary and no
+            default value was provided.
+        """
+        return self._dict.pop(key, default^)
+
+    fn __iter__[
+        mutability: __mlir_type.`i1`, self_life: AnyLifetime[mutability].type
+    ](
+        self: Reference[Self, mutability, self_life].mlir_ref_type,
+    ) -> _DictKeyIter[Self.key_type, V, mutability, self_life]:
+        """Iterate over the keyword dict's keys as immutable references.
+
+        Parameters:
+            mutability: Whether the dict is mutable.
+            self_life: The dict's lifetime.
+
+        Returns:
+            An iterator of immutable references to the dictionary keys.
+        """
+        # TODO(#36448): Use this instead of the current workaround
+        # return self._dict.__iter__()
+        return _DictKeyIter(
+            _DictEntryIter[Self.key_type, V, mutability, self_life](
+                0, 0, Reference(self)[]._dict
+            )
+        )
+
+    fn keys[
+        mutability: __mlir_type.`i1`, self_life: AnyLifetime[mutability].type
+    ](
+        self: Reference[Self, mutability, self_life].mlir_ref_type,
+    ) -> _DictKeyIter[Self.key_type, V, mutability, self_life]:
+        """Iterate over the keyword dict's keys as immutable references.
+
+        Parameters:
+            mutability: Whether the dict is mutable.
+            self_life: The dict's lifetime.
+
+        Returns:
+            An iterator of immutable references to the dictionary keys.
+        """
+        # TODO(#36448): Use this instead of the current workaround
+        # return self._dict.keys()
+        return Self.__iter__(self)
+
+    fn values[
+        mutability: __mlir_type.`i1`, self_life: AnyLifetime[mutability].type
+    ](
+        self: Reference[Self, mutability, self_life].mlir_ref_type,
+    ) -> _DictValueIter[Self.key_type, V, mutability, self_life]:
+        """Iterate over the keyword dict's values as references.
+
+        Parameters:
+            mutability: Whether the dict is mutable.
+            self_life: The dict's lifetime.
+
+        Returns:
+            An iterator of references to the dictionary values.
+        """
+        # TODO(#36448): Use this instead of the current workaround
+        # return self._dict.values()
+        return _DictValueIter(
+            _DictEntryIter[Self.key_type, V, mutability, self_life](
+                0, 0, Reference(self)[]._dict
+            )
+        )
+
+    fn items[
+        mutability: __mlir_type.`i1`, self_life: AnyLifetime[mutability].type
+    ](
+        self: Reference[Self, mutability, self_life].mlir_ref_type,
+    ) -> _DictEntryIter[Self.key_type, V, mutability, self_life]:
+        """Iterate over the keyword dictionary's entries as immutable references.
+
+        These can't yet be unpacked like Python dict items, but you can
+        access the key and value as attributes ie.
+
+        ```mojo
+        for e in dict.items():
+            print(e[].key, e[].value)
+        ```
+
+        Parameters:
+            mutability: Whether the dict is mutable.
+            self_life: The dict's lifetime.
+
+        Returns:
+            An iterator of immutable references to the dictionary entries.
+        """
+
+        # TODO(#36448): Use this instead of the current workaround
+        # return Reference(self)[]._dict.items()
+        return _DictEntryIter[Self.key_type, V, mutability, self_life](
+            0, 0, Reference(self)[]._dict
+        )
+
+    @always_inline("nodebug")
+    fn _insert(inout self, owned key: Self.key_type, owned value: V):
+        self._dict._insert(key^, value^)
+
+    @always_inline("nodebug")
+    fn _insert(inout self, key: StringLiteral, owned value: V):
+        self._insert(String(key), value^)

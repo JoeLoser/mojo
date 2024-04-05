@@ -23,6 +23,9 @@ fn test_atomic():
     var atom: Atomic[DType.index] = 3
 
     # CHECK: 3
+    print(atom.load())
+
+    # CHECK: 3
     print(atom.value)
 
     atom += 4

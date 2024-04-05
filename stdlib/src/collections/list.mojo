@@ -226,13 +226,24 @@ struct List[T: CollectionElement](CollectionElement, Sized):
         self.size = final_size
 
     @always_inline
-    fn pop_back(inout self) -> T:
-        """Pops a value from the back of this list.
+    fn pop(inout self, i: Int = -1) -> T:
+        """Pops a value from the list at the given index.
+
+        Args:
+            i: The index of the value to pop.
 
         Returns:
             The popped value.
         """
-        var ret_val = (self.data + (self.size - 1)).take_value()
+        debug_assert(-len(self) <= i < len(self), "pop index out of range")
+
+        var normalized_idx = i
+        if i < 0:
+            normalized_idx += len(self)
+
+        var ret_val = (self.data + normalized_idx).take_value()
+        for j in range(normalized_idx + 1, self.size):
+            (self.data + j).move_into(self.data + j - 1)
         self.size -= 1
         if self.size * 4 < self.capacity:
             if self.capacity > 1:
